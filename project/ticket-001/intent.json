@@ -4,14 +4,149 @@
   "summary": "Define context-preserving anonymization standard",
   "workstream": "integration",
   "classification": {
-    "kind": "SERVICE",
-    "priority": "P2",
-    "origin": "health"
+    "kind": "FEATURE",
+    "priority": "P1",
+    "origin": "requested"
   },
-  "allowedPaths": ["project/ticket-001/**", "TODO.md", "project/TICKETS.md"],
-  "forbiddenPaths": ["project/ticket-*/user-*.md"],
+  "allowedPaths": [
+    "project/ticket-001/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "VERSION",
+    "docs/STANDARD.md",
+    "docs/ARCHITECTURE.md",
+    "models/anonymization-envelope.schema.json",
+    "operations/conformance.py",
+    "operations/conformance_test.py",
+    "project/ticket-002/README.md"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md",
+    ".governance/**",
+    ".github/**",
+    "AGENTS.md",
+    "README.md",
+    "CHANGELOG.md",
+    "project.sh",
+    "project.bat",
+    "project/governance-check.*",
+    "project/new-ticket.sh",
+    "project/readme.sh",
+    "scripts/**"
+  ],
   "stacks": [],
   "dependsOn": [],
   "conflictsWith": [],
-  "integrationTicket": null
+  "integrationTicket": null,
+  "placement": {
+    "home": "wellmanifest",
+    "shape": "domain_pack",
+    "runtimeOwner": "semcod",
+    "adopt": [
+      "wellmanifest/new-project",
+      "wellmanifest/dsl",
+      "wellmanifest/logs"
+    ]
+  },
+  "delivery": {
+    "acceptedBaseSha": "fe8c849a574e794e3db94a95701de836cdf2893e",
+    "targetBranch": "main",
+    "outcome": "A versioned, context-preserving anonymization standard with stable scoped aliases, local reversible maps, faithful previews and deterministic conformance.",
+    "nonGoals": [
+      "Modify FixOS or LLX in this ticket",
+      "Send a reverse map or original sensitive values to an LLM",
+      "Treat deanonymization as execution authority",
+      "Create or publish the absent GitHub repository",
+      "Provide globally stable cross-context aliases"
+    ],
+    "complexity": "M",
+    "estimatedMinutes": 45,
+    "budgets": {
+      "maxImplementationFiles": 5,
+      "maxAffectedComponents": 3,
+      "maxPublicInterfaceChanges": 1,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Publish a data-only domain pack with a closed transport envelope and a pure reference anonymizer; keep the reverse map inside the adopting runtime and all effects behind its existing authority boundary.",
+      "components": [
+        {
+          "name": "normative-documentation",
+          "paths": ["docs/**"]
+        },
+        {
+          "name": "transport-model",
+          "paths": ["models/**"]
+        },
+        {
+          "name": "conformance",
+          "paths": ["operations/**"]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [
+        "Introduce wellmanifest.anonym/v1 transport envelope and alias vocabulary"
+      ],
+      "dataChanges": [
+        "Separate the transmitted anonymized payload from a local mapping context"
+      ],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Remove the five ticket-owned standard and conformance files; preserve the governed repository baseline."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": ["python3 operations/conformance_test.py"],
+        "evidence": "project/ticket-001/ai-codex-logs.txt"
+      },
+      {
+        "criterion": "AC-02",
+        "commands": ["python3 operations/conformance_test.py"],
+        "evidence": "project/ticket-001/ai-codex-logs.txt"
+      },
+      {
+        "criterion": "AC-03",
+        "commands": ["python3 operations/conformance_test.py"],
+        "evidence": "project/ticket-001/ai-codex-logs.txt"
+      },
+      {
+        "criterion": "AC-04",
+        "commands": ["python3 operations/conformance_test.py"],
+        "evidence": "project/ticket-001/ai-codex-logs.txt"
+      },
+      {
+        "criterion": "AC-05",
+        "commands": ["python3 operations/conformance_test.py"],
+        "evidence": "project/ticket-001/ai-codex-logs.txt"
+      },
+      {
+        "criterion": "AC-06",
+        "commands": ["python3 operations/conformance_test.py"],
+        "evidence": "project/ticket-001/ai-codex-logs.txt"
+      },
+      {
+        "criterion": "AC-07",
+        "commands": [
+          "python3 -m json.tool models/anonymization-envelope.schema.json",
+          "python3 operations/conformance.py self-test"
+        ],
+        "evidence": "project/ticket-001/ai-codex-logs.txt"
+      },
+      {
+        "criterion": "AC-08",
+        "commands": [
+          "python3 -m compileall -q operations",
+          "./project/governance-check.sh --actor agent",
+          "git diff --check"
+        ],
+        "evidence": "project/ticket-001/ai-codex-logs.txt"
+      }
+    ]
+  }
 }

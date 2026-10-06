@@ -1,0 +1,31 @@
+DISCOVERY — 2026-09-01
+- Source behavior inspected read-only in `semcod/fixos` and `semcod/llx`.
+- FixOS protects hostname, user, home, IP, MAC, token, UUID and serial values at
+  LLM boundaries, but collapses foreign home-path suffixes and has no stable
+  entity aliases or scoped reverse map.
+- FixOS preview parsing removes brackets from `[USER]` and `[HOSTNAME]` in an
+  intermediate display representation; the outgoing payload retains them.
+- LLX returns a local token-to-original mapping and supports explicit
+  deanonymization, but its tokens are hash-shaped rather than the requested
+  semantic aliases.
+- Published governance baseline: `wellmanifest/new-project` v0.19.20 at
+  `67a09fe7780e2abf6d1941694b84e11d76d27a15`.
+- Local seed-baseline commit:
+  `b6a241744abc216118461b07fd70d3e532a419ac`.
+- No secret file, provider API or system mutation was used.
+
+IMPLEMENTATION / VALIDATION — 2026-09-01
+- Material implementation paths: exactly 5, matching the approved M budget.
+- `python3 operations/conformance_test.py`: PASS — 14 tests.
+- `python3 operations/conformance.py self-test`: PASS.
+- JSON parse and Draft 2020-12 schema validation: PASS.
+- `python3 -m compileall -q operations`: PASS with cache output redirected
+  outside the repository.
+- `ruff check operations`: PASS.
+- `ruff format --check operations`: PASS.
+- `git diff --check`: PASS.
+- `./project/governance-check.sh --actor agent`: GOV-PASS — 0 errors,
+  0 warnings.
+- The reverse map was exercised only with synthetic test values and was never
+  serialized into a transport envelope.
+- No GitHub repository was created and no remote, push or PR exists.

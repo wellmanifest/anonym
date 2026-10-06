@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wellmanifest.com/anonym/v1/anonymization-envelope.schema.json",
+  "title": "Wellmanifest anonymization transport envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "policy",
+    "mappingId",
+    "payload",
+    "payloadSha256",
+    "aliasCounts"
+  ],
+  "properties": {
+    "schema": {
+      "const": "wellmanifest.anonym/v1"
+    },
+    "policy": {
+      "const": "context-preserving-v1"
+    },
+    "mappingId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "payload": {
+      "type": "string"
+    },
+    "payloadSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "aliasCounts": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Z][A-Z0-9-]*$"
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1
+      }
+    }
+  }
+}
