@@ -1,18 +1,18 @@
 # Ticket 002: Adopt wellmanifest standard 0.20.32
 
 - **ID**: ticket-002
-- **Owner**: unresolved:human
+- **Owner**: tom
 - **Status**: DONE
-- **Workflow state**: DONE
+- **Workflow state**: PUBLICATION
 - **Created**: 2026-09-19
 
 ## Goal and scope
 
-To be completed from human-owned input.
+Adopt `wellmanifest/new-project` standard 0.20.32 managed governance baseline.
 
 ## Acceptance criteria
 
-- [ ] AC-01: Scope is approved by a human owner.
+- [x] AC-01: Scope is approved by a human owner.
 
 ## Tracking boundary
 

@@ -1,0 +1,97 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-003",
+  "summary": "Harden anonym conformance against alias re-expansion, path leaks, and duplicate JSON keys",
+  "workstream": "integration",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-001/README.md",
+    "project/ticket-002/README.md",
+    "project/ticket-003/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "pyproject.toml",
+    "operations/conformance.py",
+    "operations/conformance_test.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "499a0f9e955fe502a9c8cd8258d2d951a57c655c",
+    "targetBranch": "main",
+    "outcome": "Eliminate multi-pass alias re-expansion in Anonymizer.resolve_selected, colon/comma home-path leaks in HOME_RE, duplicate JSON key acceptance in CLI envelope validation, and type-safety gaps, while adding pyproject.toml and reconciling prior tickets.",
+    "nonGoals": [
+      "Do not alter the closed wellmanifest.anonym/v1 JSON schema",
+      "No runtime dependency additions"
+    ],
+    "complexity": "M",
+    "estimatedMinutes": 25,
+    "budgets": {
+      "maxImplementationFiles": 5,
+      "maxAffectedComponents": 3,
+      "maxPublicInterfaceChanges": 1,
+      "maxRuntimeDependencies": 1
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Use single-pass regex substitution in Anonymizer.resolve_selected, left-bounded delimiter-aware HOME_RE, and object_pairs_hook duplicate-key rejection in strict_loads while keeping operations/conformance.py dependency-free.",
+      "components": [
+        {
+          "name": "anonym-conformance",
+          "paths": [
+            "pyproject.toml",
+            "operations/conformance.py",
+            "operations/conformance_test.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [
+        "operations/conformance.py: export strict_loads and accept optional argv in main()"
+      ],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Revert the ticket branch commit or close the pull request before merge."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "pytest -q",
+          "python3 operations/conformance_test.py"
+        ],
+        "evidence": "project/ticket-003/README.md"
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "ruff check operations",
+          "python3 operations/conformance.py self-test"
+        ],
+        "evidence": "project/ticket-003/README.md"
+      },
+      {
+        "criterion": "AC-03",
+        "commands": [
+          "./project/governance-check.sh --base origin/main",
+          "wellman check"
+        ],
+        "evidence": "project/ticket-003/README.md"
+      }
+    ]
+  }
+}

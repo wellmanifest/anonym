@@ -9,10 +9,10 @@ import ipaddress
 import json
 import re
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
-
+from typing import Any
 
 SCHEMA_ID = "wellmanifest.anonym/v1"
 POLICY_ID = "context-preserving-v1"
@@ -32,12 +32,11 @@ ALIAS_RE = re.compile(
     r"(?:PRIVATE|PUBLIC|LINKLOCAL|MULTICAST|RESERVED)-[0-9]+))\]"
 )
 HOME_RE = re.compile(
-    r"/home/(?P<user>(?!\[USER(?:-[0-9]+)?\](?:/|$))[^/\s\"'\\]+)"
-    r"(?P<suffix>(?:/[^\s\"'\\]*)?)"
+    r"(?<![A-Za-z0-9._\-\]])/home/"
+    r"(?P<user>(?!\[USER(?:-[0-9]+)?\](?:/|$|[:;,)\s\"'\\]))[^/\s\"'\\:;,)]+)"
+    r"(?P<suffix>(?:/[^\s\"'\\:;,)]*)?)"
 )
-IPV4_RE = re.compile(
-    r"(?<![A-Za-z0-9_.:])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![A-Za-z0-9_.:])"
-)
+IPV4_RE = re.compile(r"(?<![A-Za-z0-9_.:])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![A-Za-z0-9_.:])")
 UUID_RE = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
@@ -56,6 +55,20 @@ class ResolutionError(ValueError):
     """Raised when local alias resolution cannot be proven safe."""
 
 
+def _unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    obj: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError(f"duplicate JSON key: {key}")
+        obj[key] = value
+    return obj
+
+
+def strict_loads(raw: str) -> Any:
+    """Parse JSON while rejecting duplicate object keys."""
+    return json.loads(raw, object_pairs_hook=_unique_pairs)
+
+
 @dataclass
 class MappingContext:
     """Local-only mapping state; never serialize this object into an envelope."""
@@ -68,8 +81,12 @@ class MappingContext:
     _occurrences: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not MAPPING_ID_RE.fullmatch(self.mapping_id):
+        if not isinstance(self.mapping_id, str) or not MAPPING_ID_RE.fullmatch(self.mapping_id):
             raise ValueError("mapping_id must match the envelope mappingId contract")
+        if self.primary_user is not None and (
+            not isinstance(self.primary_user, str) or not self.primary_user
+        ):
+            raise ValueError("primary_user must be None or a non-empty string")
 
     def _record(self, category: str) -> None:
         self._occurrences[category] = self._occurrences.get(category, 0) + 1
@@ -157,6 +174,8 @@ class Anonymizer:
         return self.context.numbered_alias(category, original)
 
     def envelope(self, payload: str) -> dict[str, Any]:
+        if not isinstance(payload, str):
+            raise TypeError("payload must be a string")
         return {
             "schema": SCHEMA_ID,
             "policy": POLICY_ID,
@@ -167,6 +186,8 @@ class Anonymizer:
         }
 
     def resolve_selected(self, text: str, allowed_tokens: Iterable[str]) -> str:
+        if not isinstance(text, str):
+            raise TypeError("text must be a string")
         allowed = set(allowed_tokens)
         observed = set(ALIAS_RE.findall(text))
         unknown = sorted(observed - set(self.context.reverse_map))
@@ -176,10 +197,7 @@ class Anonymizer:
         if unselected:
             raise ResolutionError(f"unselected_alias:{','.join(unselected)}")
 
-        result = text
-        for token in sorted(observed, key=len, reverse=True):
-            result = result.replace(token, self.context.reverse_map[token])
-        return result
+        return ALIAS_RE.sub(lambda match: self.context.reverse_map[match.group(0)], text)
 
 
 def _sha256(payload: str) -> str:
@@ -188,6 +206,10 @@ def _sha256(payload: str) -> str:
 
 def render_preview(payload: str, max_lines: int = 80) -> dict[str, Any]:
     """Render only anonymized bytes and bind any truncation to the full digest."""
+    if not isinstance(payload, str):
+        raise TypeError("payload must be a string")
+    if isinstance(max_lines, bool) or not isinstance(max_lines, int):
+        raise TypeError("max_lines must be an integer")
     if max_lines < 3:
         raise ValueError("max_lines must be at least 3")
     lines = payload.splitlines(keepends=True)
@@ -252,35 +274,42 @@ def validate_envelope(envelope: Any) -> list[str]:
 def _self_test() -> None:
     context = MappingContext(mapping_id="self-test", primary_user="local")
     anonymizer = Anonymizer(context)
-    raw = "/home/remote/.cache/app peer=192.168.10.2 uuid=123e4567-e89b-12d3-a456-426614174000"
+    raw = (
+        "PATH=/home/local/bin:/home/remote/.cache/app "
+        "peer=192.168.10.2 uuid=123e4567-e89b-12d3-a456-426614174000"
+    )
     payload = anonymizer.anonymize(raw)
     envelope = anonymizer.envelope(payload)
     assert not validate_envelope(envelope)
-    assert "remote" not in payload and "192.168.10.2" not in payload
+    assert "local" not in payload and "remote" not in payload and "192.168.10.2" not in payload
     assert "reverse_map" not in envelope
     assert anonymizer.anonymize(payload) == payload
 
 
 def _read_json(path: str) -> Any:
-    if path == "-":
-        return json.load(sys.stdin)
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    raw = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
+    return strict_loads(raw)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("self-test")
     validate = subparsers.add_parser("validate")
     validate.add_argument("envelope", help="Envelope JSON file or - for stdin")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.command == "self-test":
         _self_test()
         print("anonym conformance self-test: PASS")
         return 0
 
-    errors = validate_envelope(_read_json(args.envelope))
+    try:
+        data = _read_json(args.envelope)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        errors = [f"input:{exc}"]
+    else:
+        errors = validate_envelope(data)
     print(json.dumps({"ok": not errors, "errors": errors}, indent=2))
     return 0 if not errors else 1
 

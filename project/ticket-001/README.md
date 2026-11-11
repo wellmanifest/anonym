@@ -1,9 +1,9 @@
 # Ticket 001: Define context-preserving anonymization standard
 
 - **ID**: ticket-001
-- **Owner**: unresolved:human
-- **Status**: IN_PROGRESS
-- **Workflow state**: VALIDATION
+- **Owner**: tom
+- **Status**: DONE
+- **Workflow state**: PUBLICATION
 - **Created**: 2026-09-01
 
 ## Goal and scope
