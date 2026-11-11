@@ -119,6 +119,21 @@ class MappingContext:
             raise ValueError("mapping_id must match the envelope mappingId contract")
         if self.primary_user is not None and not _is_safe_username(self.primary_user):
             raise ValueError("primary_user must be None or a safe non-empty username")
+        if not isinstance(self.reverse_map, dict):
+            raise TypeError("reverse_map must be a dict")
+        semantic_tokens = {"[IP-ANY]", "[IP-BROADCAST]", "[IP-LOOPBACK]"}
+        for tok, orig in self.reverse_map.items():
+            if (
+                not isinstance(tok, str)
+                or tok in semantic_tokens
+                or not ALIAS_RE.fullmatch(tok)
+                or not isinstance(orig, str)
+                or not orig
+            ):
+                raise ValueError(
+                    "reverse_map entries must map valid non-semantic aliases to strings"
+                )
+            _check_utf8_str(orig)
 
     def _record(self, category: str) -> None:
         self._occurrences[category] = self._occurrences.get(category, 0) + 1
@@ -244,6 +259,14 @@ class Anonymizer:
         if unselected:
             raise ResolutionError(f"unselected_alias:{','.join(unselected)}")
 
+        for tok in observed:
+            mapped = self.context.reverse_map[tok]
+            if not isinstance(mapped, str) or not mapped:
+                raise ResolutionError(f"invalid_reverse_map_value:{tok}")
+            try:
+                _check_utf8_str(mapped)
+            except ValueError as exc:
+                raise ResolutionError(f"invalid_reverse_map_value:{tok}") from exc
         return ALIAS_RE.sub(lambda match: self.context.reverse_map[match.group(0)], text)
 
 
@@ -303,7 +326,10 @@ def validate_envelope(envelope: Any) -> list[str]:
     else:
         try:
             _check_utf8_str(payload)
-            payload_utf8 = True
+            if len(payload.encode("utf-8")) > MAX_FILE_BYTES:
+                errors.append("payload:too_large")
+            else:
+                payload_utf8 = True
         except ValueError:
             errors.append("payload:invalid_utf8")
     digest = envelope["payloadSha256"]
@@ -362,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
         errors = [f"input:{exc}"]
     else:
         errors = validate_envelope(data)
-    print(json.dumps({"ok": not errors, "errors": errors}, indent=2))
+    print(json.dumps({"ok": not errors, "errors": errors}, indent=2, allow_nan=False))
     return 0 if not errors else 1
 
 
