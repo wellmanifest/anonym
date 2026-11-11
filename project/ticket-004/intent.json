@@ -1,0 +1,85 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-004",
+  "summary": "Harden anonym regular-file IO, strict JSON bounds, and key/category guards",
+  "workstream": "integration",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-003/README.md",
+    "project/ticket-004/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "operations/conformance.py",
+    "operations/test_anonym_hardening.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "1d832a371b3b8d277daffb43d0cc7e79ce0dff1a",
+    "targetBranch": "main",
+    "outcome": "Enforce O_NOFOLLOW|O_NONBLOCK 4 MiB regular-file and bounded stdin reads, reject NaN/Infinity/1e999/deep JSON nesting in strict_loads, guard non-string envelope keys, validate MappingContext categories and Anonymizer.resolve_selected token iterables, add regression tests, and mark merged ticket-003 DONE.",
+    "nonGoals": [
+      "Do not alter the closed wellmanifest.anonym/v1 JSON schema",
+      "No runtime dependency additions"
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 20,
+    "budgets": {
+      "maxImplementationFiles": 4,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Add bounded O_NOFOLLOW regular-file/stdin readers, finite/depth-bounded JSON validation, and key/category/iterable guards in operations/conformance.py and cover adversarial cases in operations/test_anonym_hardening.py.",
+      "components": [
+        {
+          "name": "anonym-conformance",
+          "paths": [
+            "operations/conformance.py",
+            "operations/test_anonym_hardening.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Revert the ticket-004 branch commit or close the pull request before merge."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "ruff check operations",
+          "pytest -q",
+          "python3 operations/conformance.py self-test"
+        ],
+        "evidence": "project/ticket-004/README.md"
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "./project/governance-check.sh --base origin/main",
+          "wellman check"
+        ],
+        "evidence": "project/ticket-004/README.md"
+      }
+    ]
+  }
+}
