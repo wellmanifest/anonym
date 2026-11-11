@@ -79,6 +79,65 @@ class AnonymHardeningTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             anon.resolve_selected(masked, [123])  # type: ignore[list-item]
 
+    def test_huge_int_lone_surrogates_symlink_ancestors_and_unsafe_usernames(self) -> None:
+        import os
+
+        for bad_json in (
+            '{"x": ' + ("9" * 400) + "}",
+            '{"x": -' + ("9" * 400) + "}",
+            '{"x": "\\ud800"}',
+            '{"\\udfff": 1}',
+            '{"x": "\ud800"}',
+        ):
+            with self.subTest(sample=bad_json[:32]), self.assertRaises(ValueError):
+                conformance.strict_loads(bad_json)
+
+        ctx = conformance.MappingContext(mapping_id="valid-map", primary_user="alice")
+        env = conformance.Anonymizer(ctx).envelope("hello")
+        env_surrogate = dict(env, payload="bad\ud800text")
+        self.assertIn("payload:invalid_utf8", conformance.validate_envelope(env_surrogate))
+        env_huge_count = dict(env, aliasCounts={"USER": 10**400})
+        self.assertIn(
+            "aliasCounts:invalid_count:USER", conformance.validate_envelope(env_huge_count)
+        )
+        with self.assertRaises(ValueError):
+            conformance.render_preview("line\ud800bad")
+
+        for bad_user in ("", " ", "alice/bob", "alice\\bob", "alice\nbob", "alice:bob"):
+            with self.subTest(user=bad_user):
+                with self.assertRaises(ValueError):
+                    conformance.MappingContext(mapping_id="m1", primary_user=bad_user)
+                with self.assertRaises(ValueError):
+                    ctx.user_alias(bad_user)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real_dir = root / "real_sub"
+            real_dir.mkdir()
+            env_file = real_dir / "envelope.json"
+            env_file.write_text(json.dumps(env), encoding="utf-8")
+            sym_dir = root / "sym_sub"
+            sym_dir.symlink_to(real_dir)
+
+            with self.assertRaises(OSError):
+                conformance.read_regular_utf8(sym_dir / "envelope.json")
+
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with self.assertRaises(OSError):
+                    conformance.read_regular_utf8(Path("sym_sub/envelope.json"))
+            finally:
+                os.chdir(old_cwd)
+
+            for bad_max in (True, False, 0, -1):
+                with self.subTest(max_bytes=bad_max), self.assertRaises(ValueError):
+                    conformance.read_regular_utf8(env_file, max_bytes=bad_max)  # type: ignore[arg-type]
+
+        self.assertIsNone(conformance.MAPPING_ID_RE.match("map-1\n"))
+        self.assertIsNone(conformance.CATEGORY_RE.match("USER\n"))
+        self.assertIsNone(conformance.SHA256_RE.match("a" * 64 + "\n"))
+
 
 if __name__ == "__main__":
     unittest.main()

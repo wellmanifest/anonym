@@ -1,0 +1,85 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-005",
+  "summary": "Harden anonym JSON overflow/surrogates, symlink ancestors/inodes, and alias/user validation",
+  "workstream": "integration",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-004/README.md",
+    "project/ticket-005/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "operations/conformance.py",
+    "operations/test_anonym_hardening.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "af262dba42575da5c46eef030cba1a576edac598",
+    "targetBranch": "main",
+    "outcome": "Enforce \\A...\\Z regex anchors, 10**400 JSON integer overflow and lone UTF-16 surrogate rejection across strict_loads/validate_envelope/render_preview, positive integer max_bytes plus symlink-ancestor and lstat/fstat inode identity checks in read_regular_utf8, safe username validation in MappingContext, expand operations/test_anonym_hardening.py, and mark merged ticket-004 DONE.",
+    "nonGoals": [
+      "Do not alter the closed wellmanifest.anonym/v1 JSON schema",
+      "No runtime dependency additions"
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 20,
+    "budgets": {
+      "maxImplementationFiles": 4,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Harden JSON tree validation, regular-file inode/ancestor verification, envelope UTF-8/count bounds, and MappingContext username guards in operations/conformance.py and cover adversarial cases in operations/test_anonym_hardening.py.",
+      "components": [
+        {
+          "name": "anonym-conformance",
+          "paths": [
+            "operations/conformance.py",
+            "operations/test_anonym_hardening.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Revert the ticket-005 branch commit or close the pull request before merge."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "ruff check operations",
+          "pytest -q",
+          "python3 operations/conformance.py self-test"
+        ],
+        "evidence": "project/ticket-005/README.md"
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "./project/governance-check.sh --base origin/main",
+          "wellman check"
+        ],
+        "evidence": "project/ticket-005/README.md"
+      }
+    ]
+  }
+}

@@ -29,8 +29,9 @@ ENVELOPE_FIELDS = {
     "payloadSha256",
     "aliasCounts",
 }
-MAPPING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-CATEGORY_RE = re.compile(r"^[A-Z][A-Z0-9-]*$")
+MAPPING_ID_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+CATEGORY_RE = re.compile(r"\A[A-Z][A-Z0-9-]*\Z")
+SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 ALIAS_RE = re.compile(
     r"\[(?:USER(?:-[0-9]+)?|UUID-[0-9]+|"
     r"IP-(?:ANY|LOOPBACK|BROADCAST|"
@@ -80,7 +81,24 @@ def _parse_finite_float(token: str) -> float:
     return parsed
 
 
+def _check_utf8_str(value: str) -> None:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("lone UTF-16 surrogate in string is forbidden") from exc
+
+
+def _is_safe_username(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and not any(ord(ch) <= 32 or ord(ch) == 127 or ch in "/\\:;,)\"'" for ch in value)
+    )
+
+
 def _validate_json_tree(root: Any, max_depth: int = MAX_JSON_DEPTH) -> None:
+    if type(max_depth) is not int or max_depth < 1:
+        raise ValueError("max_depth must be a positive integer")
     stack: list[tuple[Any, int]] = [(root, 0)]
     while stack:
         current, depth = stack.pop()
@@ -90,23 +108,48 @@ def _validate_json_tree(root: Any, max_depth: int = MAX_JSON_DEPTH) -> None:
             for key, child in current.items():
                 if not isinstance(key, str):
                     raise ValueError("JSON object keys must be strings")
+                _check_utf8_str(key)
                 stack.append((child, depth + 1))
         elif isinstance(current, list):
             for child in current:
                 stack.append((child, depth + 1))
+        elif isinstance(current, str):
+            _check_utf8_str(current)
+        elif type(current) is int:
+            try:
+                ok = math.isfinite(float(current))
+            except OverflowError:
+                ok = False
+            if not ok:
+                raise ValueError("JSON integer magnitude exceeds finite range")
         elif isinstance(current, float) and not math.isfinite(current):
             raise ValueError("non-finite float value is forbidden")
 
 
 def read_regular_utf8(path: Path, max_bytes: int = MAX_FILE_BYTES) -> str:
-    if path.is_symlink():
+    if type(max_bytes) is not int or max_bytes < 1:
+        raise ValueError("max_bytes must be a positive integer")
+    if not path.is_absolute():
+        cur = Path()
+        for part in path.parts[:-1]:
+            cur = cur / part
+            if cur.is_symlink():
+                raise OSError(f"refusing symlink ancestor: {cur}")
+    elif any(anc.is_symlink() for anc in path.parents if len(anc.parts) > 2):
+        raise OSError(f"refusing symlink ancestor: {path}")
+    lst = os.lstat(path)
+    if stat.S_ISLNK(lst.st_mode):
         raise OSError(f"refusing symlink file: {path}")
+    if not stat.S_ISREG(lst.st_mode):
+        raise OSError(f"refusing non-regular file: {path}")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     fd = os.open(path, flags)
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             raise OSError(f"refusing non-regular file: {path}")
+        if (st.st_dev, st.st_ino) != (lst.st_dev, lst.st_ino):
+            raise OSError(f"file inode changed during open: {path}")
         if st.st_size > max_bytes:
             raise ValueError(f"file exceeds {max_bytes} bytes: {path}")
         chunks = bytearray()
@@ -126,6 +169,7 @@ def strict_loads(raw: str) -> Any:
     """Parse JSON while rejecting duplicate keys, non-finite numbers, and deep nesting."""
     if not isinstance(raw, str):
         raise TypeError("JSON payload must be a string")
+    _check_utf8_str(raw)
     if len(raw.encode("utf-8")) > MAX_FILE_BYTES:
         raise ValueError(f"JSON payload exceeds {MAX_FILE_BYTES} bytes")
     try:
@@ -155,10 +199,8 @@ class MappingContext:
     def __post_init__(self) -> None:
         if not isinstance(self.mapping_id, str) or not MAPPING_ID_RE.fullmatch(self.mapping_id):
             raise ValueError("mapping_id must match the envelope mappingId contract")
-        if self.primary_user is not None and (
-            not isinstance(self.primary_user, str) or not self.primary_user
-        ):
-            raise ValueError("primary_user must be None or a non-empty string")
+        if self.primary_user is not None and not _is_safe_username(self.primary_user):
+            raise ValueError("primary_user must be None or a safe non-empty username")
 
     def _record(self, category: str) -> None:
         self._occurrences[category] = self._occurrences.get(category, 0) + 1
@@ -183,8 +225,8 @@ class MappingContext:
         return token
 
     def user_alias(self, username: str) -> str:
-        if not isinstance(username, str) or not username:
-            raise ValueError("username must be a non-empty string")
+        if not _is_safe_username(username):
+            raise ValueError("username must be a safe non-empty string")
         if self.primary_user is not None and username == self.primary_user:
             token = "[USER]"
             existing = self.reverse_map.get(token)
@@ -285,6 +327,7 @@ class Anonymizer:
 
 
 def _sha256(payload: str) -> str:
+    _check_utf8_str(payload)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -338,12 +381,19 @@ def validate_envelope(envelope: Any) -> list[str]:
     ):
         errors.append("mappingId:invalid")
     payload = envelope["payload"]
+    payload_utf8 = False
     if not isinstance(payload, str):
         errors.append("payload:not_string")
+    else:
+        try:
+            _check_utf8_str(payload)
+            payload_utf8 = True
+        except ValueError:
+            errors.append("payload:invalid_utf8")
     digest = envelope["payloadSha256"]
-    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+    if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
         errors.append("payloadSha256:invalid")
-    elif isinstance(payload, str) and digest != _sha256(payload):
+    elif payload_utf8 and digest != _sha256(payload):
         errors.append("payloadSha256:mismatch")
 
     counts = envelope["aliasCounts"]
@@ -353,7 +403,7 @@ def validate_envelope(envelope: Any) -> list[str]:
         for category, count in counts.items():
             if not isinstance(category, str) or not CATEGORY_RE.fullmatch(category):
                 errors.append("aliasCounts:invalid_category")
-            if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            if type(count) is not int or count < 1 or count > MAX_FILE_BYTES:
                 errors.append(f"aliasCounts:invalid_count:{category}")
     return errors
 

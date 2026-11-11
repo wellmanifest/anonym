@@ -2,7 +2,7 @@
 
 - **ID**: ticket-004
 - **Owner**: tom
-- **Status**: IN_PROGRESS
+- **Status**: DONE
 - **Workflow state**: PUBLICATION
 - **Created**: 2026-11-11
 
