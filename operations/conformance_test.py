@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -11,6 +14,7 @@ from conformance import (
     MappingContext,
     ResolutionError,
     render_preview,
+    strict_loads,
     validate_envelope,
 )
 
@@ -32,6 +36,30 @@ class PathConformanceTest(unittest.TestCase):
         self.assertIn("/home/[USER-2]/projects/api/pyproject.toml", payload)
         self.assertIn("/home/[USER-3]/.local/share/app/state", payload)
         self.assertNotIn("/home/[USER]/...", payload)
+        self.assertNotIn("alice", payload)
+
+    def test_colon_comma_and_parenthesized_home_paths_do_not_leak(self) -> None:
+        context = MappingContext(mapping_id="paths-delim", primary_user="primary")
+        anonymizer = Anonymizer(context)
+        raw = (
+            "PATH=/home/primary/bin:/home/alice/.local/bin:/home/bob "
+            "mounts=/home/alice/src,/home/carol/dst (log=/home/dave/app.log)"
+        )
+        payload = anonymizer.anonymize(raw)
+        for leaked in ("primary", "alice", "bob", "carol", "dave"):
+            self.assertNotIn(leaked, payload)
+        self.assertIn("PATH=/home/[USER]/bin:/home/[USER-2]/.local/bin:/home/[USER-3]", payload)
+        self.assertIn("mounts=/home/[USER-2]/src,/home/[USER-4]/dst", payload)
+        self.assertIn("(log=/home/[USER-5]/app.log)", payload)
+        self.assertEqual(anonymizer.anonymize(payload), payload)
+
+    def test_non_root_home_subpath_is_not_misclassified_as_username(self) -> None:
+        context = MappingContext(mapping_id="subpath", primary_user="primary")
+        anonymizer = Anonymizer(context)
+        raw = "/opt/service/home/config.yaml file:///home/alice/.cache"
+        payload = anonymizer.anonymize(raw)
+        self.assertIn("/opt/service/home/config.yaml", payload)
+        self.assertIn("file:///home/[USER-2]/.cache", payload)
         self.assertNotIn("alice", payload)
 
     def test_alias_is_stable_across_turns_in_one_context(self) -> None:
@@ -100,6 +128,21 @@ class MappingAndTransportConformanceTest(unittest.TestCase):
         resolved = anonymizer.resolve_selected(payload, {"[USER-2]"})
         self.assertEqual(resolved, "rm -rf /home/alice/.cache/example")
 
+    def test_resolve_selected_single_pass_prevents_secondary_alias_injection(self) -> None:
+        context = MappingContext(mapping_id="single-pass", primary_user="secret_owner")
+        anonymizer = Anonymizer(context)
+        anonymizer.anonymize("/home/secret_owner/.ssh")
+        for idx in range(2, 11):
+            context.reverse_map[f"[USER-{idx}]"] = f"u{idx}"
+        # [USER-10] is longer than [USER]; if resolved in multi-pass order, a literal
+        # "[USER]" inside [USER-10]'s value would be re-expanded into "secret_owner"!
+        context.reverse_map["[USER-10]"] = "crafted_[USER]_dir"
+        resolved = anonymizer.resolve_selected(
+            "/home/[USER-10]/work /home/[USER]/safe",
+            {"[USER-10]", "[USER]"},
+        )
+        self.assertEqual(resolved, "/home/crafted_[USER]_dir/work /home/secret_owner/safe")
+
     def test_unknown_unselected_and_semantic_tokens_fail_closed(self) -> None:
         context = MappingContext(mapping_id="reject", primary_user="primary")
         anonymizer = Anonymizer(context)
@@ -133,30 +176,61 @@ class MappingAndTransportConformanceTest(unittest.TestCase):
         self.assertEqual(preview["payloadSha256"], envelope["payloadSha256"])
         self.assertFalse(preview["truncated"])
 
-    def test_truncated_preview_preserves_displayed_tokens(self) -> None:
+    def test_truncated_preview_preserves_displayed_tokens_and_rejects_bad_types(self) -> None:
         payload = "\n".join(f"line-{index} [USER-2]" for index in range(10)) + "\n"
         preview = render_preview(payload, max_lines=5)
         self.assertTrue(preview["truncated"])
         self.assertIn("[USER-2]", preview["text"])
         self.assertNotIn("USER-2", preview["text"].replace("[USER-2]", ""))
+        with self.assertRaises(TypeError):
+            render_preview(payload, max_lines=True)  # type: ignore[arg-type]
+        with self.assertRaises(TypeError):
+            render_preview(123)  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            render_preview(payload, max_lines=2)
 
-    def test_envelope_tampering_and_reverse_map_field_are_rejected(self) -> None:
+    def test_envelope_tampering_duplicate_keys_and_cli_validation(self) -> None:
         anonymizer = Anonymizer(MappingContext(mapping_id="tamper"))
-        envelope = anonymizer.envelope(anonymizer.anonymize("peer=8.8.8.8"))
-        envelope["payload"] += " changed"
-        self.assertIn("payloadSha256:mismatch", validate_envelope(envelope))
-        envelope["reverseMap"] = {"[IP-PUBLIC-1]": "8.8.8.8"}
-        self.assertIn("unexpected:reverseMap", validate_envelope(envelope))
+        valid_envelope = anonymizer.envelope(anonymizer.anonymize("peer=8.8.8.8"))
+        tampered = dict(valid_envelope)
+        tampered["payload"] += " changed"
+        self.assertIn("payloadSha256:mismatch", validate_envelope(tampered))
+        tampered["reverseMap"] = {"[IP-PUBLIC-1]": "8.8.8.8"}
+        self.assertIn("unexpected:reverseMap", validate_envelope(tampered))
+
+        with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+            strict_loads('{"payload": "a", "payload": "b"}')
+
+        script = Path(__file__).with_name("conformance.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            ok_path = Path(tmp) / "ok.json"
+            ok_path.write_text(json.dumps(valid_envelope), encoding="utf-8")
+            ok_res = subprocess.run(
+                [sys.executable, str(script), "validate", str(ok_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(ok_res.returncode, 0, msg=ok_res.stdout + ok_res.stderr)
+
+            dup_path = Path(tmp) / "dup.json"
+            dup_path.write_text('{"schema": "a", "schema": "b"}\n', encoding="utf-8")
+            dup_res = subprocess.run(
+                [sys.executable, str(script), "validate", str(dup_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(dup_res.returncode, 1)
+            report = json.loads(dup_res.stdout)
+            self.assertFalse(report["ok"])
+            self.assertTrue(any("duplicate JSON key" in err for err in report["errors"]))
 
     def test_schema_is_closed_and_names_the_contract(self) -> None:
-        schema_path = (
-            Path(__file__).parents[1] / "models/anonymization-envelope.schema.json"
-        )
+        schema_path = Path(__file__).parents[1] / "models/anonymization-envelope.schema.json"
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         self.assertFalse(schema["additionalProperties"])
-        self.assertEqual(
-            schema["properties"]["schema"]["const"], "wellmanifest.anonym/v1"
-        )
+        self.assertEqual(schema["properties"]["schema"]["const"], "wellmanifest.anonym/v1")
         self.assertNotIn("reverseMap", schema["properties"])
 
 
