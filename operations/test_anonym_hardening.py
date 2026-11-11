@@ -195,6 +195,60 @@ class AnonymHardeningTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
+    def test_unnormalized_abs_symlink_traversal_reverse_map_invariants_and_payload_bounds(
+        self,
+    ) -> None:
+        import os
+
+        import anonym_io
+
+        self.assertIn("read_regular_utf8", anonym_io.__all__)
+        ctx = conformance.MappingContext(mapping_id="valid-bounds", primary_user="alice")
+        anon = conformance.Anonymizer(ctx)
+        env = anon.envelope(anon.anonymize("/home/alice/.cache"))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real_sub = root / "real_sub"
+            real_sub.mkdir()
+            sibling = root / "sibling"
+            sibling.mkdir()
+            env_file = root / "envelope.json"
+            env_file.write_text(json.dumps(env), encoding="utf-8")
+            nested_env = real_sub / "envelope.json"
+            nested_env.write_text(json.dumps(env), encoding="utf-8")
+            sym_sub = root / "sym_sub"
+            sym_sub.symlink_to(real_sub)
+
+            with self.assertRaises(OSError):
+                conformance.read_regular_utf8(f"{sym_sub}/../envelope.json")
+
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(sibling)
+                with self.assertRaises(OSError):
+                    conformance.read_regular_utf8("../sym_sub/envelope.json")
+            finally:
+                os.chdir(old_cwd)
+
+        for bad_rm in (
+            {"NOT-AN-ALIAS": "val"},
+            {"[IP-ANY]": "0.0.0.0"},
+            {"[USER-2]": ""},
+            {"[USER-2]": "bad\ud800val"},
+        ):
+            with self.assertRaises(ValueError):
+                conformance.MappingContext(mapping_id="rm-bad", reverse_map=bad_rm)
+
+        ctx2 = conformance.MappingContext(mapping_id="tamper-rm")
+        anon2 = conformance.Anonymizer(ctx2)
+        masked = anon2.anonymize("peer=10.2.3.4")
+        ctx2.reverse_map["[IP-PRIVATE-1]"] = "bad\ud800ip"
+        with self.assertRaisesRegex(conformance.ResolutionError, "invalid_reverse_map_value"):
+            anon2.resolve_selected(masked, {"[IP-PRIVATE-1]"})
+
+        huge_env = dict(env, payload="a" * (conformance.MAX_FILE_BYTES + 1))
+        self.assertIn("payload:too_large", conformance.validate_envelope(huge_env))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,22 @@ from typing import Any
 MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_JSON_DEPTH = 64
 
+__all__ = [
+    "MAX_FILE_BYTES",
+    "MAX_JSON_DEPTH",
+    "_check_no_symlink_ancestors",
+    "_check_utf8_str",
+    "_parse_finite_float",
+    "_parse_finite_int",
+    "_reject_json_constant",
+    "_sha256",
+    "_unique_pairs",
+    "_validate_json_tree",
+    "read_json_input",
+    "read_regular_utf8",
+    "strict_loads",
+]
+
 
 def _unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     obj: dict[str, Any] = {}
@@ -91,20 +107,38 @@ def _validate_json_tree(root: Any, max_depth: int = MAX_JSON_DEPTH) -> None:
             raise ValueError("non-finite float value is forbidden")
 
 
+def _check_no_symlink_ancestors(raw_path: str) -> None:
+    path_obj = Path(raw_path)
+    raw_parts = path_obj.parts[:-1]
+    if path_obj.is_absolute():
+        cur = Path(path_obj.anchor)
+        walk_parts = raw_parts[1:]
+    else:
+        cwd = Path.cwd()
+        if len(cwd.parts) > 2 and cwd.is_symlink():
+            raise OSError(f"refusing symlink ancestor: {cwd}")
+        for anc in cwd.parents:
+            if len(anc.parts) > 2 and anc.is_symlink():
+                raise OSError(f"refusing symlink ancestor: {anc}")
+        cur = cwd
+        walk_parts = raw_parts
+    for part in walk_parts:
+        if part in ("", "."):
+            continue
+        cur = cur / part
+        if part != ".." and len(cur.parts) > 2 and cur.is_symlink():
+            raise OSError(f"refusing symlink ancestor: {cur}")
+    abs_path = Path(os.path.abspath(raw_path))
+    if any(anc.is_symlink() for anc in abs_path.parents if len(anc.parts) > 2):
+        raise OSError(f"refusing symlink ancestor: {path_obj}")
+
+
 def read_regular_utf8(path: str | Path, max_bytes: int = MAX_FILE_BYTES) -> str:
     if type(max_bytes) is not int or max_bytes < 1:
         raise ValueError("max_bytes must be a positive integer")
     raw_path = os.fspath(path)
     path_obj = Path(raw_path)
-    if not path_obj.is_absolute():
-        cur = Path()
-        for part in path_obj.parts[:-1]:
-            cur = cur / part
-            if part not in {".", ".."} and cur.is_symlink():
-                raise OSError(f"refusing symlink ancestor: {cur}")
-    abs_path = Path(os.path.abspath(raw_path))
-    if any(anc.is_symlink() for anc in abs_path.parents if len(anc.parts) > 2):
-        raise OSError(f"refusing symlink ancestor: {path_obj}")
+    _check_no_symlink_ancestors(raw_path)
     lst = os.lstat(path_obj)
     if stat.S_ISLNK(lst.st_mode):
         raise OSError(f"refusing symlink file: {path_obj}")
