@@ -4,23 +4,56 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import ipaddress
 import json
-import math
-import os
 import re
-import stat
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+_OPS_DIR = str(Path(__file__).resolve().parent)
+if _OPS_DIR not in sys.path:
+    sys.path.insert(0, _OPS_DIR)
+
+from anonym_io import (  # noqa: E402
+    MAX_FILE_BYTES,
+    MAX_JSON_DEPTH,
+    _check_utf8_str,
+    _sha256,
+    read_json_input,
+    read_regular_utf8,
+    strict_loads,
+)
+
+__all__ = [
+    "ALIAS_RE",
+    "CATEGORY_RE",
+    "ENVELOPE_FIELDS",
+    "HOME_RE",
+    "IPV4_RE",
+    "MAPPING_ID_RE",
+    "MAX_FILE_BYTES",
+    "MAX_JSON_DEPTH",
+    "POLICY_ID",
+    "RFC1918",
+    "SCHEMA_ID",
+    "SEMANTIC_IPS",
+    "SHA256_RE",
+    "UUID_RE",
+    "Anonymizer",
+    "MappingContext",
+    "ResolutionError",
+    "main",
+    "read_regular_utf8",
+    "render_preview",
+    "strict_loads",
+    "validate_envelope",
+]
+
 SCHEMA_ID = "wellmanifest.anonym/v1"
 POLICY_ID = "context-preserving-v1"
-MAX_FILE_BYTES = 4 * 1024 * 1024
-MAX_JSON_DEPTH = 64
 ENVELOPE_FIELDS = {
     "schema",
     "policy",
@@ -39,8 +72,8 @@ ALIAS_RE = re.compile(
 )
 HOME_RE = re.compile(
     r"(?<![A-Za-z0-9._\-\]])/home/"
-    r"(?P<user>(?!\[USER(?:-[0-9]+)?\](?:/|$|[:;,)\s\"'\\]))[^/\s\"'\\:;,)]+)"
-    r"(?P<suffix>(?:/[^\s\"'\\:;,)]*)?)"
+    r"(?P<user>(?!\[USER(?:-[0-9]+)?\](?:/|$|[:;,)\]\s\"'\\]))[^/\s\"'\\:;,)[\]]+)"
+    r"(?P<suffix>(?:/[^\s\"'\\:;,)[\]]*)?)"
 )
 IPV4_RE = re.compile(r"(?<![A-Za-z0-9_.:])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![A-Za-z0-9_.:])")
 UUID_RE = re.compile(
@@ -48,8 +81,7 @@ UUID_RE = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
 )
 RFC1918 = tuple(
-    ipaddress.ip_network(network)
-    for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+    ipaddress.ip_network(network) for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 )
 SEMANTIC_IPS = {
     "0.0.0.0": "[IP-ANY]",
@@ -61,128 +93,14 @@ class ResolutionError(ValueError):
     """Raised when local alias resolution cannot be proven safe."""
 
 
-def _unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    obj: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in obj:
-            raise ValueError(f"duplicate JSON key: {key}")
-        obj[key] = value
-    return obj
-
-
-def _reject_json_constant(token: str) -> Any:
-    raise ValueError(f"non-finite JSON constant {token!r} is forbidden")
-
-
-def _parse_finite_float(token: str) -> float:
-    parsed = float(token)
-    if not math.isfinite(parsed):
-        raise ValueError(f"non-finite JSON number {token!r} is forbidden")
-    return parsed
-
-
-def _check_utf8_str(value: str) -> None:
-    try:
-        value.encode("utf-8")
-    except UnicodeEncodeError as exc:
-        raise ValueError("lone UTF-16 surrogate in string is forbidden") from exc
-
-
 def _is_safe_username(value: Any) -> bool:
-    return (
-        isinstance(value, str)
-        and bool(value)
-        and not any(ord(ch) <= 32 or ord(ch) == 127 or ch in "/\\:;,)\"'" for ch in value)
-    )
-
-
-def _validate_json_tree(root: Any, max_depth: int = MAX_JSON_DEPTH) -> None:
-    if type(max_depth) is not int or max_depth < 1:
-        raise ValueError("max_depth must be a positive integer")
-    stack: list[tuple[Any, int]] = [(root, 0)]
-    while stack:
-        current, depth = stack.pop()
-        if depth > max_depth:
-            raise ValueError(f"JSON nesting depth exceeds maximum ({max_depth})")
-        if isinstance(current, dict):
-            for key, child in current.items():
-                if not isinstance(key, str):
-                    raise ValueError("JSON object keys must be strings")
-                _check_utf8_str(key)
-                stack.append((child, depth + 1))
-        elif isinstance(current, list):
-            for child in current:
-                stack.append((child, depth + 1))
-        elif isinstance(current, str):
-            _check_utf8_str(current)
-        elif type(current) is int:
-            try:
-                ok = math.isfinite(float(current))
-            except OverflowError:
-                ok = False
-            if not ok:
-                raise ValueError("JSON integer magnitude exceeds finite range")
-        elif isinstance(current, float) and not math.isfinite(current):
-            raise ValueError("non-finite float value is forbidden")
-
-
-def read_regular_utf8(path: Path, max_bytes: int = MAX_FILE_BYTES) -> str:
-    if type(max_bytes) is not int or max_bytes < 1:
-        raise ValueError("max_bytes must be a positive integer")
-    if not path.is_absolute():
-        cur = Path()
-        for part in path.parts[:-1]:
-            cur = cur / part
-            if cur.is_symlink():
-                raise OSError(f"refusing symlink ancestor: {cur}")
-    elif any(anc.is_symlink() for anc in path.parents if len(anc.parts) > 2):
-        raise OSError(f"refusing symlink ancestor: {path}")
-    lst = os.lstat(path)
-    if stat.S_ISLNK(lst.st_mode):
-        raise OSError(f"refusing symlink file: {path}")
-    if not stat.S_ISREG(lst.st_mode):
-        raise OSError(f"refusing non-regular file: {path}")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    fd = os.open(path, flags)
+    if not isinstance(value, str) or not value:
+        return False
     try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode):
-            raise OSError(f"refusing non-regular file: {path}")
-        if (st.st_dev, st.st_ino) != (lst.st_dev, lst.st_ino):
-            raise OSError(f"file inode changed during open: {path}")
-        if st.st_size > max_bytes:
-            raise ValueError(f"file exceeds {max_bytes} bytes: {path}")
-        chunks = bytearray()
-        while True:
-            chunk = os.read(fd, min(65536, max_bytes + 1 - len(chunks)))
-            if not chunk:
-                break
-            chunks.extend(chunk)
-            if len(chunks) > max_bytes:
-                raise ValueError(f"file exceeds {max_bytes} bytes: {path}")
-    finally:
-        os.close(fd)
-    return bytes(chunks).decode("utf-8")
-
-
-def strict_loads(raw: str) -> Any:
-    """Parse JSON while rejecting duplicate keys, non-finite numbers, and deep nesting."""
-    if not isinstance(raw, str):
-        raise TypeError("JSON payload must be a string")
-    _check_utf8_str(raw)
-    if len(raw.encode("utf-8")) > MAX_FILE_BYTES:
-        raise ValueError(f"JSON payload exceeds {MAX_FILE_BYTES} bytes")
-    try:
-        parsed = json.loads(
-            raw,
-            object_pairs_hook=_unique_pairs,
-            parse_constant=_reject_json_constant,
-            parse_float=_parse_finite_float,
-        )
-    except RecursionError as exc:
-        raise ValueError("JSON nesting depth exceeds maximum") from exc
-    _validate_json_tree(parsed)
-    return parsed
+        _check_utf8_str(value)
+    except ValueError:
+        return False
+    return not any(ord(ch) <= 32 or ord(ch) == 127 or ch in "/\\:;,)\"'[]" for ch in value)
 
 
 @dataclass
@@ -210,6 +128,7 @@ class MappingContext:
             raise ValueError(f"invalid alias category: {category!r}")
         if not isinstance(original, str) or not original:
             raise ValueError("original value must be a non-empty string")
+        _check_utf8_str(original)
         key = (category, original)
         existing = self._aliases.get(key)
         if existing is not None:
@@ -255,6 +174,7 @@ class Anonymizer:
     def anonymize(self, text: str) -> str:
         if not isinstance(text, str):
             raise TypeError("text must be a string")
+        _check_utf8_str(text)
         result = HOME_RE.sub(self._replace_home, text)
         result = UUID_RE.sub(self._replace_uuid, result)
         return IPV4_RE.sub(self._replace_ipv4, result)
@@ -308,6 +228,7 @@ class Anonymizer:
     def resolve_selected(self, text: str, allowed_tokens: Iterable[str]) -> str:
         if not isinstance(text, str):
             raise TypeError("text must be a string")
+        _check_utf8_str(text)
         if isinstance(allowed_tokens, (str, bytes)):
             raise TypeError("allowed_tokens must be an iterable of token strings")
         allowed: set[str] = set()
@@ -324,11 +245,6 @@ class Anonymizer:
             raise ResolutionError(f"unselected_alias:{','.join(unselected)}")
 
         return ALIAS_RE.sub(lambda match: self.context.reverse_map[match.group(0)], text)
-
-
-def _sha256(payload: str) -> str:
-    _check_utf8_str(payload)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def render_preview(payload: str, max_lines: int = 80) -> dict[str, Any]:
@@ -424,20 +340,7 @@ def _self_test() -> None:
 
 
 def _read_json(path: str) -> Any:
-    if path == "-":
-        buf = getattr(sys.stdin, "buffer", None)
-        if buf is not None:
-            raw_bytes = buf.read(MAX_FILE_BYTES + 1)
-            if len(raw_bytes) > MAX_FILE_BYTES:
-                raise ValueError(f"stdin exceeds {MAX_FILE_BYTES} bytes")
-            raw = raw_bytes.decode("utf-8")
-        else:
-            raw = sys.stdin.read(MAX_FILE_BYTES + 1)
-            if len(raw.encode("utf-8")) > MAX_FILE_BYTES:
-                raise ValueError(f"stdin exceeds {MAX_FILE_BYTES} bytes")
-    else:
-        raw = read_regular_utf8(Path(path))
-    return strict_loads(raw)
+    return read_json_input(path)
 
 
 def main(argv: list[str] | None = None) -> int:

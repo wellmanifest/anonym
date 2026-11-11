@@ -138,6 +138,63 @@ class AnonymHardeningTests(unittest.TestCase):
         self.assertIsNone(conformance.CATEGORY_RE.match("USER\n"))
         self.assertIsNone(conformance.SHA256_RE.match("a" * 64 + "\n"))
 
+    def test_modular_bounds_relative_symlink_traversal_5000_digits_and_bracketed_home_paths(
+        self,
+    ) -> None:
+        import os
+
+        ops_dir = Path(__file__).resolve().parent
+        for name in ("anonym_io.py", "conformance.py", "test_anonym_hardening.py"):
+            lines = (ops_dir / name).read_text(encoding="utf-8").splitlines()
+            self.assertLess(len(lines), 500, f"{name} exceeded 500 lines: {len(lines)}")
+
+        with self.assertRaises(ValueError):
+            conformance.strict_loads('{"x": ' + ("9" * 5000) + "}")
+
+        ctx = conformance.MappingContext(mapping_id="bracket-map", primary_user="primary")
+        anon = conformance.Anonymizer(ctx)
+        hp = "/" + "home/"
+        bracketed = f"[{hp}alice] [{hp}primary/.ssh] {hp}alice/file[1].txt"
+        masked = anon.anonymize(bracketed)
+        self.assertEqual(
+            masked,
+            f"[{hp}[USER-2]] [{hp}[USER]/.ssh] {hp}[USER-2]/file[1].txt",
+        )
+        self.assertEqual(anon.anonymize(masked), masked)
+
+        for bad_user in ("[USER-2]", "alice[1]", "bob]2", "sur\ud800user"):
+            with self.subTest(user=bad_user):
+                with self.assertRaises(ValueError):
+                    conformance.MappingContext(mapping_id="m2", primary_user=bad_user)
+                with self.assertRaises(ValueError):
+                    ctx.user_alias(bad_user)
+
+        for bad_call in (
+            lambda: anon.anonymize("bad\ud800text"),
+            lambda: anon.resolve_selected("bad\ud800text", set()),
+            lambda: ctx.numbered_alias("UUID", "bad\ud800orig"),
+        ):
+            with self.assertRaises(ValueError):
+                bad_call()
+
+        env = anon.envelope(masked)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real_sub = root / "real_sub"
+            real_sub.mkdir()
+            env_file = root / "envelope.json"
+            env_file.write_text(json.dumps(env), encoding="utf-8")
+            sym_sub = root / "sym_sub"
+            sym_sub.symlink_to(real_sub)
+
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with self.assertRaises(OSError):
+                    conformance.read_regular_utf8("sym_sub/../envelope.json")
+            finally:
+                os.chdir(old_cwd)
+
 
 if __name__ == "__main__":
     unittest.main()

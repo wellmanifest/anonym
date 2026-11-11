@@ -1,0 +1,87 @@
+{
+  "schema": "new-project.intent/v3",
+  "ticket": "ticket-006",
+  "summary": "Modularize anonym_io and harden relative symlink traversal, JSON digit/surrogate bounds, and bracketed home paths",
+  "workstream": "integration",
+  "classification": {
+    "kind": "BUG",
+    "priority": "P1",
+    "origin": "health"
+  },
+  "allowedPaths": [
+    "project/ticket-005/README.md",
+    "project/ticket-006/**",
+    "TODO.md",
+    "project/TICKETS.md",
+    "operations/anonym_io.py",
+    "operations/conformance.py",
+    "operations/test_anonym_hardening.py"
+  ],
+  "forbiddenPaths": [
+    "project/ticket-*/user-*.md"
+  ],
+  "stacks": [],
+  "dependsOn": [],
+  "conflictsWith": [],
+  "integrationTicket": null,
+  "delivery": {
+    "acceptedBaseSha": "214c2214b7653848b3684bfadc9b5b11a73d22e5",
+    "targetBranch": "main",
+    "outcome": "Extract bounded file/stdin UTF-8 I/O and strict JSON helpers into operations/anonym_io.py (< 500L), prevent relative sym_dir/.. symlink-parent traversal, bound JSON integer digits before int(), reject bracket characters in usernames and lone UTF-16 surrogates across Anonymizer/MappingContext, anonymize bracketed Unix home paths idempotently without consuming closing brackets, expand operations/test_anonym_hardening.py, and mark merged ticket-005 DONE.",
+    "nonGoals": [
+      "Do not alter the closed wellmanifest.anonym/v1 JSON schema",
+      "No runtime dependency additions"
+    ],
+    "complexity": "S",
+    "estimatedMinutes": 20,
+    "budgets": {
+      "maxImplementationFiles": 4,
+      "maxAffectedComponents": 1,
+      "maxPublicInterfaceChanges": 0,
+      "maxRuntimeDependencies": 0
+    },
+    "architecture": {
+      "status": "accepted",
+      "decision": "Extract bounded regular-file/stdin UTF-8 I/O and strict JSON helpers into operations/anonym_io.py re-exported by operations/conformance.py so all modules stay strictly below 500 lines.",
+      "components": [
+        {
+          "name": "anonym-conformance",
+          "paths": [
+            "operations/anonym_io.py",
+            "operations/conformance.py",
+            "operations/test_anonym_hardening.py"
+          ]
+        }
+      ],
+      "responsibilityChanges": false,
+      "interfaceChanges": [],
+      "dataChanges": [],
+      "ui": {
+        "impact": "none",
+        "states": [],
+        "evidence": []
+      },
+      "rollback": "Revert the ticket-006 branch commit or close the pull request before merge."
+    },
+    "runtimeDependencies": [],
+    "validation": [
+      {
+        "criterion": "AC-01",
+        "commands": [
+          "ruff check --no-cache operations",
+          "PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider",
+          "python3 operations/conformance.py self-test"
+        ],
+        "evidence": "project/ticket-006/README.md"
+      },
+      {
+        "criterion": "AC-02",
+        "commands": [
+          "./project/governance-check.sh --base origin/main",
+          "wellman check"
+        ],
+        "evidence": "project/ticket-006/README.md"
+      }
+    ]
+  }
+}
